@@ -1,0 +1,107 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+// LCD setup
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// IR sensors
+const int IR1 = 2;
+const int IR2 = 3;
+
+// Servo setup
+Servo speedBreaker;
+const int servoPin = 9;
+
+// Timing
+unsigned long t1 = 0, t2 = 0;
+float distance = 1.0; // meters
+float speed = 0;
+float speedLimit = 18.0; // km/h
+
+// Control flags
+enum State { IDLE, DETECTED_IR1, COMPLETED };
+State currentState = IDLE;
+unsigned long lastTriggerTime = 0;
+const unsigned long cooldown = 3000;
+
+void setup() {
+  pinMode(IR1, INPUT);
+  pinMode(IR2, INPUT);
+  speedBreaker.attach(servoPin);
+  speedBreaker.write(0); // Flat position
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Speed Brkr");
+
+  Serial.begin(9600);
+}
+
+void loop() {
+  switch (currentState) {
+    case IDLE:
+      if (digitalRead(IR1) == LOW && millis() - lastTriggerTime > cooldown) {
+        delay(50);
+        if (digitalRead(IR1) == LOW) {
+          t1 = millis();
+          currentState = DETECTED_IR1;
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Object Detected");
+          Serial.println("IR1 Triggered");
+          while (digitalRead(IR1) == LOW); // Wait till object passes
+        }
+      }
+      break;
+
+    case DETECTED_IR1:
+      if (digitalRead(IR2) == LOW) {
+        delay(50);
+        if (digitalRead(IR2) == LOW) {
+          t2 = millis();
+          float timeTaken = (t2 - t1) / 1000.0;
+          if (timeTaken > 0.01) {
+            float speed_mps = distance / timeTaken;
+            speed = speed_mps * 3.6;
+          } else {
+            speed = 0;
+          }
+
+          Serial.print("Speed: ");
+          Serial.print(speed);
+          Serial.println(" km/h");
+
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          if (speed > speedLimit) {
+            lcd.print("Over Speed!     ");
+            Serial.println("Over Speed! Raising...");
+            speedBreaker.write(90); // Raise
+            delay(7000);            // Hold up
+            speedBreaker.write(0);  // Lower
+          } else {
+            lcd.print("Speed OK        ");
+          }
+
+          lcd.setCursor(0, 1);
+          lcd.print("Speed: ");
+          lcd.print(speed, 2);
+          lcd.print(" km/h");
+
+          while (digitalRead(IR2) == LOW); // Wait for object to clear IR2
+
+          currentState = COMPLETED;
+        }
+      }
+      break;
+
+    case COMPLETED:
+      // Reset system
+      lastTriggerTime = millis();
+      currentState = IDLE;
+      break;
+  }
+}
+
